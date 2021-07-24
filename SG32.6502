@@ -1,0 +1,159 @@
+	DSK SG32
+	
+**************************************************
+* Version 1.0 - 32-byte output
+* By Charles Mangin 
+* License: CC0 1.0 Universal
+* https://creativecommons.org/publicdomain/zero/1.0/
+**************************************************
+* "To make a Cold Hash, or Salad-Magundy. TAKE a cold Turkey, two cold Chickens, 
+* or if you have neither, a piece of fine white Veal will do; cut the Breasts of 
+* these Fowls into fair dices, and Mince all the rest; to the Quantity of two 
+* Chickens you mull take eight or ten large Anchovies, wash and bone them, eight 
+* large Pickl’d Oysters, ten or twelve fine green Pickl’d Cucumbers, shred the 
+* Oysters, the Anchovies, the Cucumbers, and one whole Lemon small, mix them with 
+* the shred Meat, lay it in the middle of the Dish, lay the Dices of the white part 
+* round the Dish, with halv’d Anchovies, whole Pickl’d Oysters, quarter’d Cucumbers, 
+* sliced Lemon, whole Pickl’d Mushrooms, Capers or any Pickle you like; cut also 
+* some fine Lettice, and lay round among the Garnish, but put not Oil and Vinegar 
+* to the Minced Meat, ’till it comes to Table."
+* 
+* -- https://en.wikipedia.org/wiki/Salmagundi
+**************************************************
+* Variables
+**************************************************
+HASH		EQU $800
+SCRATCH		EQU $900
+SEED		EQU $B00
+MESSAGE		EQU $C00
+**************************************************
+* Apple Standard Memory Locations
+**************************************************
+COUT      	EQU	$FDED       ; CALLS THE OUTPUT ROUTINE
+NEWLINE		EQU $FD8E		; OUTPUTS NEW LINE/ CARRIAGE RETURN
+PRHEX		EQU $FDDA		; PRINTS BYTE IN ACCUMULATOR AS HEX
+**************************************************
+* Let's get this party started
+**************************************************
+
+			ORG $0300						; PROGRAM DATA STARTS AT $800
+
+*	EC-ED - ITERATIONS
+*	MESSAGE ORIGIN IN FC,FD
+*	MESSAGE DESTINATION IN EE,EF  
+*	BLOAD FILE LENGTH AT $AA60 -> FA,FB
+
+CLEARMEM
+					LDA #$00
+					TAY
+ZERO				DEY
+					STA HASH, Y
+					BNE ZERO
+
+*	EORs MESSAGE TO SCRATCH WITH RUNNING CHECKSUM, PADS WITH BYTES FROM SEED IF NEEDED 
+                 
+					LDA   #$00         		; ZERO ITERATION COUNT 
+					STA   $EC          		; 
+					STA   $ED          		; 
+					STA   $FE          		; CLEAR CHECKSUM                
+					STA	  $FC
+					TAX               		; 
+					TAY               		; 
+					LDA   #$0C
+					STA   $FD
+ITERATE				INC   $ED          		; INCREMENT ITERATION COUNT LO <--INCED
+					BNE   ROLLOVER     		; ROLLED OVER TO 0?  
+					INC   $EC          		; IF SO, INCREMENT HI BYTE
+ROLLOVER			LDA   $ED          		; ITERATION == MESSAGE LENGTH?
+					CMP   $FA				; BLOAD FILE LENGTH AT $AA60
+					BNE   FULLLENGTH   		; NOT YET  
+					LDA   $EC          		; YES? HOW ABOUT HI BYTE?
+					CMP   $FB      		    ; BLOAD FILE LENGTH AT $AA60
+					BNE   FULLLENGTH   		; NOT YET. CONTINUE.            
+					LDA   #$0B         		; MESSAGE LENGTH COMPLETE 
+					STA   $FD          		; POINT MESSAGE SOURCE TO SEED PAGE 0B00
+					LDY   #$00         		; ZERO Y OFFSET 
+					STY   $FA          		; ZERO MESSAGE LENGTH
+					STY   $FB          		; ZERO MESSAGE LENGTH
+FULLLENGTH			LDA   ($FC),Y      		; LOAD ORIGIN + Y OFFSET
+					EOR   SCRATCH,X    		; COMBINE WITH SEED/SCRATCH
+					STA   SCRATCH,X    		; STORE DESTINATION + X OFFSET   
+					EOR   $FE          		; XOR WITH RUNNING CHECKSUM
+					STA   $FE          		; STORE CHECKSUM
+					INY                		; NEXT Y OFFSET
+					BNE   NEXTOFFSET		; IF Y=ZERO, NEXT SOURCE PAGE  
+					INC   $FD          		; IF Y=ZERO, NEXT SOURCE PAGE            
+NEXTOFFSET			INX                		; NEXT X OFFSET
+					CPX   #$FF         		; IS X=FF     
+					BNE   ITERATE			; OTHERWISE LOOP -> INCED
+					STA   SCRATCH,X			; STORE CHECKSUM AT SCRATCH+FF        
+					INX                		; ZERO X OFFSET             
+					LDA   $FB          		; X=0. DOING SEED PADDING?
+					ORA   $FA          		; IF SO, FA, FB WILL BE ZERO
+					BNE   ITERATE			; IF FA/FB=ZERO THEN FINISH  
+
+* load 4 bytes into FPAcc. Multiply by GRatio. EOR result bytes into hash.
+* repeats until all 256 bytes of scratch processed.
+
+					LDA   GOLDENLO     	; GOLDEN RATIO IN FP FORMAT
+					LDY   GOLDENHI      	
+					JSR   $E9E3        	; PUTS GR INTO ARG (A5-A9)
+					LDA   #$09         	; SCRATCH PAGE SOURCE into FC/FB
+					STA   $FC          	
+					LDA   #$FC         	; last 4 bytes of scratch 
+					STA   $FB          	
+HASHLO				LDA   #$1F         	; HASH DESTINATION FE/FD
+					STA   $FD          	
+					LDY   #$03         	; 4 BYTES AT A GO - FROM RIGHT TO LEFT
+HASHHI				LDA   #$08         	; HASH DESTINATION HI BYTE
+					STA   $FE          	
+					LDA   #$81						
+					STA   $9D           ; reset FPA high byte for Multiply
+LOADSCRATCH			LDA   ($FB),Y       ; LOAD SCRATCH BYTES INTO FAC 
+					STA   $009E,Y       ; FAC=9d-a1 
+					DEY               
+					BPL   LOADSCRATCH        
+					JSR   $E982         ; Multiply FAC and ARG.
+					LDY   #$00          
+					LDA   $A1           
+					EOR   $A0           
+					EOR   $9F           
+					EOR   $9E           
+					EOR   ($FD),Y       ; EOR RESULT BYTES WITH BYTE IN HASH,  
+					STA   ($FD),Y       ; STORE IN HASH 
+					DEC   $FB           ; SLIDE UP ONE BYTE AND REPEAT
+					BEQ   PRHASH        
+					DEC   $FD           ; NEXT BYTE OF HASH
+					BPL   HASHHI        
+					BMI   HASHLO        
+PRHASH				LDY   #$00          ; print hash as hex
+					LDX   #$08
+LDHASH				LDA   HASH,Y        
+DOTHETHING			JSR   PRHEX			; PRINTS HEX CHAR
+					LDA   #$A0
+					JSR   COUT			; SPACE AFTER EACH BYTE
+					DEX
+					BNE   NEXTHEX
+					JSR   NEWLINE		; NEWLINE AFTER 8 BYTES - PRETTIFY FORMATTING
+					LDX   #$08          
+NEXTHEX				INY   
+					CPY   #$20            
+					BNE   LDHASH             
+					RTS               
+
+GOLDEN	EQU *
+					HEX 81,CF,1B,BC,DD					; golden ratio
+
+GOLDENLO		db	<GOLDEN
+GOLDENHI		db	>GOLDEN
+
+
+*** 	SEED BYTES
+*** 	B3 83 BD D3 1E F4 A6 F5 83 FC B0 10 0C 1F 67 CA DE 53 CB C1 14 64 70 4C B7 EA 51 7A 63 30 88 7E
+*** 	67 07 7B A7 3C E9 4D EB 07 F9 61 20 18 3E CE 95 BD A6 97 83 28 C8 E0 98 6F D5 A2 F4 C6 60 11 FC 
+*** 	CE 0E F6 4F 78 D3 9A D7 0E F3 C2 40 30 7C 9D 2B 7B 4D 2F 07 50 91 C1 31 DE AB 45 E9 8D C0 22 F9 
+*** 	9D 1C ED 9E F0 A7 35 AF 1C E7 85 80 60 F8 3B 56 F6 9A 5E 0E A0 23 83 62 BD 57 8A D3 1B 81 44 F3 
+*** 	3B 38 DB 3D E1 4F 6A 5F 38 CF 0B 01 C0 F1 76 AC ED 35 BC 1C 41 46 07 C4 7B AE 15 A7 36 03 88 E7 
+*** 	76 70 B7 7A C3 9E D4 BE 70 9F 16 02 81 E3 EC 59 DB 6A 79 38 82 8C 0E 89 F6 5D 2A 4F 6C 06 11 CF 
+*** 	EC E0 6F F4 87 3D A9 7D E0 3F 2C 04 03 C7 D9 B2 B7 D4 F2 70 05 19 1C 13 ED BA 54 9E D8 0C 22 9F 
+*** 	D9 C1 DE E9 0F 7A 53 FA C1 7E 58 08 06 8F B3 65 6F A9 E5 E0 0A 32 38 26 DB 75 A8 3D B1 18 44 3F 
